@@ -758,6 +758,7 @@ class Shell : public i::AllStatic {
   static Counter* GetCounter(const char* name, bool is_histogram);
   static Local<String> Stringify(Isolate* isolate, Local<Value> value);
   static void RunShell(Isolate* isolate);
+  static void LoadJSC(const v8::FunctionCallbackInfo<v8::Value>& args);
   static bool RunMainIsolate(Isolate* isolate, bool keep_context_alive);
   static bool SetOptions(int argc, char* argv[]);
 
