@@ -6042,6 +6042,140 @@ int Shell::Main(int argc, char* argv[]) {
   return result;
 }
 
+bool endsWith(std::string const &str, std::string const &suffix) {
+  if (str.length() < suffix.length()) {
+    return false;
+  }
+  return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin());
+}
+
+static void Disassemble(internal::BytecodeArray bytecode) {
+  internal::OFStream os(stdout);
+  bytecode.Disassemble(os);
+  auto consts = bytecode.constant_pool();
+  for (int i = 0; i < consts.length(); i++) {
+    auto obj = consts.get(i);
+    if (obj.IsSharedFunctionInfo()) {
+      auto shared = v8::internal::SharedFunctionInfo::cast(obj);
+      os << "Function name " << shared.Name() << "\n";
+      Disassemble(shared.GetBytecodeArray());
+    }
+  }
+}
+
+
+bool ProduceCache(Isolate* isolate, Local<String> source, Local<Value> name, std::string const &cachefile) {
+  HandleScope handle_scope(isolate);
+
+  MaybeLocal<Script> maybe_script;
+  Local<Context> context(isolate->GetCurrentContext());
+  ScriptOrigin origin(name);
+
+  ScriptCompiler::Source script_source(source, origin);
+  maybe_script = ScriptCompiler::Compile(context, &script_source,
+                                         ScriptCompiler::kNoCompileOptions);
+  Local<Script> script;
+  if (!maybe_script.ToLocal(&script)) {
+    return false;
+  }
+  ScriptCompiler::CachedData* cached_data =
+      ScriptCompiler::CreateCodeCache(script->GetUnboundScript());
+  FILE* output_file = fopen(const_cast<char*>(cachefile.c_str()), "wb");
+  if (output_file == NULL) {
+    printf("Failed to open output file\n");
+    return false;
+  }
+  fwrite(cached_data->data, sizeof(char), cached_data->length, output_file);
+  fclose(output_file);
+
+  MaybeLocal<Value> maybe_result = script->Run(context);
+  Local<Value> result;
+  if (!maybe_result.ToLocal(&result)) {
+    return false;
+  }
+  String::Utf8Value utf(isolate, result);
+  printf("%s\n", *utf);
+
+  return true;
+}
+
+bool ConsumeCodeCache(Isolate* isolate, Local<String> source, Local<Value> name, uint8_t* data, int length){
+  HandleScope handle_scope(isolate);
+
+  Local<Context> context(isolate->GetCurrentContext());
+  base::Address add = reinterpret_cast<base::Address>(data + 8);
+  uint32_t len = base::ReadLittleEndianValue<uint32_t>(add);
+  std::string dummyCode = '"' + std::string(len-2, ' ') + '"';
+  source = String::NewFromUtf8(isolate, const_cast<char*>(dummyCode.c_str())).ToLocalChecked();
+  ScriptOrigin origin(name);
+  // Deserialize the bytecode into a script
+  ScriptCompiler::CachedData* cached_data = new ScriptCompiler::CachedData(data, length, ScriptCompiler::CachedData::BufferOwned);
+  ScriptCompiler::Source script_source(source, origin, cached_data);
+  Local<Script> script;
+  if (!ScriptCompiler::Compile(context, &script_source, ScriptCompiler::kConsumeCodeCache).ToLocal(&script)) {
+    printf("Failed to compile script\n");
+    return false;
+  }
+  MaybeLocal<Value> maybe_result = script->Run(context);
+  Local<Value> result;
+  if (!maybe_result.ToLocal(&result)) {
+    return false;
+  }
+  String::Utf8Value utf(isolate, result);
+  printf("%s\n", *utf);
+  return true;
+}
+
+bool DisassembleCache(Isolate* isolate, uint8_t* data, int length){
+  auto scriptdata = new i::ScriptData(data, length);
+  base::Address add = reinterpret_cast<base::Address>(data + 8);
+  uint32_t len = base::ReadLittleEndianValue<uint32_t>(add);
+  std::string dummyCode = '"' + std::string(len-2, ' ') + '"';
+  auto source = reinterpret_cast<i::Isolate*>(isolate)->factory()->NewStringFromUtf8(i::CStrVector(const_cast<char*>(dummyCode.c_str())))
+                    .ToHandleChecked();
+  auto fun = i::CodeSerializer::Deserialize(reinterpret_cast<i::Isolate*>(isolate), scriptdata, source, ScriptOriginOptions())
+                 .ToHandleChecked();
+  Disassemble(fun->GetBytecodeArray());
+  return true;
+}
+
+
+
+void Shell::LoadJSC(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  HandleScope handle_scope(isolate);
+  String::Utf8Value option(isolate, args[0]);
+  for (int i = 0; i < args.Length(); i++) {
+    String::Utf8Value filename(isolate, args[i]);
+    if (*filename == NULL) {
+      Throw(args.GetIsolate(), "Error loading file");
+      return;
+    }
+    Local<String> source = ReadFile(isolate, *filename);
+    Local<String> name = String::NewFromUtf8(isolate, *filename).ToLocalChecked();
+    if (source.IsEmpty()) {
+      Throw(isolate, "Error loading file");
+      return;
+    }
+    std::string fname(filename.operator*());
+    std::string ext = ".jsc";
+    if(endsWith(fname, ext))
+    {
+      int length = 0;
+      auto filedata = reinterpret_cast<uint8_t*>(ReadChars(*filename, &length));
+      if (filedata == NULL) {
+        Throw(isolate, "Error reading file");
+        return;
+      }
+
+//      ConsumeCodeCache(isolate, source, name, filedata, length);
+      DisassembleCache(isolate, filedata, length);
+    }
+    else {
+      ProduceCache(isolate, source, name, fname+"c");
+    }
+  }
+}
 }  // namespace v8
 
 int main(int argc, char* argv[]) { return v8::Shell::Main(argc, argv); }
