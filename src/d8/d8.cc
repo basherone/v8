@@ -3300,6 +3300,8 @@ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
                        FunctionTemplate::New(isolate, ReadLine));
   global_template->Set(isolate, "load",
                        FunctionTemplate::New(isolate, ExecuteFile));
+  global_template->Set(isolate, "loadjsc",
+                       FunctionTemplate::New(isolate, LoadJSC));
   global_template->Set(isolate, "setTimeout",
                        FunctionTemplate::New(isolate, SetTimeout));
   // Some Emscripten-generated code tries to call 'quit', which in turn would
